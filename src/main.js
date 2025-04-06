@@ -19,28 +19,110 @@ let currentPositionIndex = 0;
 let scene, camera, renderer, controls;
 let carTexture, carMaterial, carPlane;
 let curbTexture, curbMaterial, curbPlane;
-let paintCanvas, paintContext;
-let paintTexture, paintMaterial, paintPlane;
 let raycaster, mouse;
+// Preloaded textures
+let preloadedTextures = {};
 
-// Drawing variables
+// UV-based painting variables
 let isDrawMode = false;
 let isDrawing = false;
 let drawColor = '#ff0000'; // Default red
-let drawSize = 10; // Brush size
-let drawOpacity = 0.7; // Spray paint opacity
-let sprayParticles = []; // Store spray particle positions for current stroke
-let lastDrawX = 0;
-let lastDrawY = 0;
+let drawSize = 6; // Brush size (smaller default)
+let drawOpacity = 1.0; // Spray paint opacity (full opacity)
+let paintRenderTarget, paintTexture;
+let brushCanvas, brushContext;
+let paintScene, paintCamera;
+let lastIntersection = null;
+
+// Function to preload all textures
+function preloadTextures(callback) {
+  const textureLoader = new THREE.TextureLoader();
+  textureLoader.crossOrigin = 'anonymous';
+  
+  let loadedCount = 0;
+  const totalTextures = viewPositions.length + 1; // +1 for curb background
+  
+  // Add loading indicator to UI
+  const app = document.querySelector('#app');
+  app.innerHTML = `
+    <div class="car-viewer">
+      <h1>Tesla Defiler</h1>
+      <div id="loading-indicator" style="text-align: center; padding: 20px;">
+        <div>Loading textures... <span id="loading-progress">0/${totalTextures}</span></div>
+        <div style="margin-top: 10px; height: 10px; width: 100%; background: #ccc;">
+          <div id="progress-bar" style="height: 100%; width: 0%; background: #2196F3; transition: width 0.3s;"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Preload curb texture
+  textureLoader.load(
+    'https://images.kasra.codes/curb.png',
+    function(texture) {
+      preloadedTextures['curb'] = texture;
+      loadedCount++;
+      updateLoadingProgress(loadedCount, totalTextures);
+      checkAllLoaded();
+    },
+    undefined,
+    function(err) {
+      console.error('Error loading curb texture:', err);
+      loadedCount++;
+      updateLoadingProgress(loadedCount, totalTextures);
+      checkAllLoaded();
+    }
+  );
+  
+  // Preload all car textures
+  viewPositions.forEach(position => {
+    textureLoader.load(
+      position.url,
+      function(texture) {
+        preloadedTextures[position.name] = texture;
+        loadedCount++;
+        updateLoadingProgress(loadedCount, totalTextures);
+        checkAllLoaded();
+      },
+      undefined,
+      function(err) {
+        console.error(`Error loading texture for ${position.name}:`, err);
+        loadedCount++;
+        updateLoadingProgress(loadedCount, totalTextures);
+        checkAllLoaded();
+      }
+    );
+  });
+  
+  function updateLoadingProgress(current, total) {
+    const progressElement = document.getElementById('loading-progress');
+    const progressBar = document.getElementById('progress-bar');
+    if (progressElement && progressBar) {
+      progressElement.textContent = `${current}/${total}`;
+      progressBar.style.width = `${(current / total) * 100}%`;
+    }
+  }
+  
+  function checkAllLoaded() {
+    if (loadedCount === totalTextures) {
+      callback();
+    }
+  }
+}
 
 // Init function
 function init() {
+  // Preload all textures first
+  preloadTextures(initializeScene);
+}
+
+function initializeScene() {
   const app = document.querySelector('#app');
   
   // Create UI
   app.innerHTML = `
     <div class="car-viewer">
-      <h1>Car Viewer</h1>
+      <h1>Tesla Defiler</h1>
       <div id="canvas-container" class="viewer-container">
         <!-- Three.js renderer will be added here -->
       </div>
@@ -49,9 +131,8 @@ function init() {
         <button id="next-btn" class="nav-btn">→</button>
       </div>
       <div class="controls">
-        <button id="download-btn">Download Image</button>
-        <button id="reset-view-btn">Reset View</button>
-        <button id="draw-mode-btn">Spray Paint</button>
+        <button id="download-btn" title="Download Image">💾</button>
+        <button id="draw-mode-btn" title="Spray Paint">🎨</button>
       </div>
       <div id="draw-controls" class="draw-controls" style="display: none;">
         <div class="color-picker">
@@ -66,13 +147,13 @@ function init() {
         </div>
         <div class="size-control">
           <span>Size: </span>
-          <input type="range" id="brush-size" min="2" max="30" value="10">
-          <span id="size-value">10px</span>
+          <input type="range" id="brush-size" min="2" max="30" value="6">
+          <span id="size-value">6px</span>
         </div>
         <div class="opacity-control">
           <span>Opacity: </span>
-          <input type="range" id="brush-opacity" min="10" max="100" value="70">
-          <span id="opacity-value">70%</span>
+          <input type="range" id="brush-opacity" min="10" max="100" value="100">
+          <span id="opacity-value">100%</span>
         </div>
         <button id="clear-canvas-btn">Clear Paint</button>
         <button id="exit-draw-mode-btn">Exit Paint Mode</button>
@@ -83,7 +164,7 @@ function init() {
   // Set up Three.js scene
   setupThreeJS();
   
-  // Load initial car image
+  // Load initial car image using preloaded texture
   loadCarImage(viewPositions[currentPositionIndex].url);
   
   // Set up event listeners
@@ -121,17 +202,34 @@ function setupThreeJS() {
   controls.maxPolarAngle = Math.PI / 2;
   controls.enableRotate = false; // Disable rotation initially
   
-  // Create raycaster for mouse interaction
+  // Initialize raycaster for mouse interaction and UV painting
   raycaster = new THREE.Raycaster();
   mouse = new THREE.Vector2();
   
-  // Create an offscreen canvas for the paint layer
-  paintCanvas = document.createElement('canvas');
-  paintCanvas.width = 1024;
-  paintCanvas.height = 1024;
-  paintContext = paintCanvas.getContext('2d');
-  paintContext.fillStyle = 'rgba(0, 0, 0, 0)';
-  paintContext.fillRect(0, 0, paintCanvas.width, paintCanvas.height);
+  // Create brush canvas for generating procedural brush patterns
+  brushCanvas = document.createElement('canvas');
+  brushCanvas.width = 256;
+  brushCanvas.height = 256;
+  brushContext = brushCanvas.getContext('2d');
+  
+  // Create an offscreen canvas for painting instead of WebGLRenderTarget
+  // This is simpler and more reliable for our use case
+  const paintResolution = 2048;
+  const paintCanvas = document.createElement('canvas');
+  paintCanvas.width = paintResolution;
+  paintCanvas.height = paintResolution;
+  const paintContext = paintCanvas.getContext('2d');
+  
+  // Clear canvas with transparent background
+  paintContext.clearRect(0, 0, paintResolution, paintResolution);
+  
+  // Create texture from canvas
+  paintTexture = new THREE.CanvasTexture(paintCanvas);
+  paintTexture.needsUpdate = true;
+  
+  // Store references for later use
+  window.paintCanvas = paintCanvas;
+  window.paintContext = paintContext;
   
   // Load curb background
   loadCurbBackground();
@@ -141,53 +239,74 @@ function setupThreeJS() {
 }
 
 function loadCurbBackground() {
-  // Create a loader
-  const textureLoader = new THREE.TextureLoader();
-  
-  // Load the curb texture with CORS enabled
-  textureLoader.crossOrigin = 'anonymous';
-  textureLoader.load(
-    'https://images.kasra.codes/curb.png',
-    // onLoad callback
-    function(texture) {
-      curbTexture = texture;
-      
-      // Create material and plane for curb image
-      curbMaterial = new THREE.MeshBasicMaterial({ 
-        map: curbTexture
-      });
-      
-      // Calculate the size of the background
-      // We want it to cover most of the scene but with some margin
-      const curbWidth = 2.5;
-      const curbHeight = 2.5;
-      
-      // Create geometry for background
-      const geometry = new THREE.PlaneGeometry(curbWidth, curbHeight);
-      
-      curbPlane = new THREE.Mesh(geometry, curbMaterial);
-      curbPlane.position.z = -0.01; // Position behind the car
-      
-      // Adjust vertical position to place the car on the curb properly
-      curbPlane.position.y = -0.15; // Slightly lower to position car on curb
-      
-      scene.add(curbPlane);
-      
-      // If car is already loaded, make sure it's positioned correctly
-      if (carPlane) {
-        carPlane.position.z = 0.01; // Ensure car is in front of curb
-      }
-      if (paintPlane) {
-        paintPlane.position.z = 0.02; // Ensure paint layer is in front of car
-      }
-    },
-    // onProgress callback (not needed)
-    undefined,
-    // onError callback
-    function(err) {
-      console.error('Error loading curb texture:', err);
+  // Use preloaded curb texture
+  if (preloadedTextures['curb']) {
+    curbTexture = preloadedTextures['curb'];
+    
+    // Create material and plane for curb image
+    curbMaterial = new THREE.MeshBasicMaterial({ 
+      map: curbTexture
+    });
+    
+    // Calculate the size of the background
+    // We want it to cover most of the scene but with some margin
+    const curbWidth = 2.5;
+    const curbHeight = 2.5;
+    
+    // Create geometry for background
+    const geometry = new THREE.PlaneGeometry(curbWidth, curbHeight);
+    
+    curbPlane = new THREE.Mesh(geometry, curbMaterial);
+    curbPlane.position.z = -0.01; // Position behind the car
+    
+    // Adjust vertical position to place the car on the curb properly
+    curbPlane.position.y = -0.15; // Slightly lower to position car on curb
+    
+    scene.add(curbPlane);
+    
+    // If car is already loaded, make sure it's positioned correctly
+    if (carPlane) {
+      carPlane.position.z = 0.01; // Ensure car is in front of curb
     }
-  );
+  } else {
+    console.error('Curb texture not preloaded');
+    
+    // Fallback to loading directly if preloaded texture not available
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.crossOrigin = 'anonymous';
+    textureLoader.load(
+      'https://images.kasra.codes/curb.png',
+      function(texture) {
+        curbTexture = texture;
+        
+        // Create material and plane for curb image
+        curbMaterial = new THREE.MeshBasicMaterial({ 
+          map: curbTexture
+        });
+        
+        // Calculate the size of the background
+        const curbWidth = 2.5;
+        const curbHeight = 2.5;
+        
+        // Create geometry for background
+        const geometry = new THREE.PlaneGeometry(curbWidth, curbHeight);
+        
+        curbPlane = new THREE.Mesh(geometry, curbMaterial);
+        curbPlane.position.z = -0.01; // Position behind the car
+        curbPlane.position.y = -0.15; // Slightly lower to position car on curb
+        
+        scene.add(curbPlane);
+        
+        if (carPlane) {
+          carPlane.position.z = 0.01;
+        }
+      },
+      undefined,
+      function(err) {
+        console.error('Error loading curb texture:', err);
+      }
+    );
+  }
 }
 
 function onWindowResize() {
@@ -202,87 +321,115 @@ function onWindowResize() {
 }
 
 function loadCarImage(url) {
-  // Create a loader
-  const textureLoader = new THREE.TextureLoader();
-  
-  // Clear existing planes if any
+  // Clear existing car plane if any
   if (carPlane) {
     scene.remove(carPlane);
-  }
-  if (paintPlane) {
-    scene.remove(paintPlane);
   }
   
   // Reset paint layer
   clearPaintLayer();
   
-  // Load the texture with CORS enabled
-  textureLoader.crossOrigin = 'anonymous';
-  textureLoader.load(
-    url,
-    // onLoad callback
-    function(texture) {
-      carTexture = texture;
-      
-      // Create material and plane for car image
-      carMaterial = new THREE.MeshBasicMaterial({ 
-        map: carTexture,
-        transparent: true
-      });
-      
-      // Create geometry based on texture aspect ratio
-      const aspect = carTexture.image.width / carTexture.image.height;
-      const width = aspect >= 1 ? 1.5 : 1.5 * aspect;
-      const height = aspect >= 1 ? 1.5 / aspect : 1.5;
-      
-      const geometry = new THREE.PlaneGeometry(width, height);
-      
-      carPlane = new THREE.Mesh(geometry, carMaterial);
-      // Position car slightly above the curb if curb exists
-      carPlane.position.z = 0.01;
-      scene.add(carPlane);
-      
-      // Create paint layer with same geometry
-      paintTexture = new THREE.CanvasTexture(paintCanvas);
-      paintTexture.needsUpdate = true;
-      
-      paintMaterial = new THREE.MeshBasicMaterial({
-        map: paintTexture,
-        transparent: true,
-        depthTest: false
-      });
-      
-      paintPlane = new THREE.Mesh(geometry, paintMaterial);
-      paintPlane.position.z = 0.02; // Slightly in front of the car
-      scene.add(paintPlane);
-      
-      // Check if curb exists, if not reload it
-      if (!curbPlane || !scene.getObjectById(curbPlane.id)) {
-        loadCurbBackground();
-      } else {
-        // Make sure curb stays behind car
-        curbPlane.position.z = -0.01;
+  // Find the view position object based on URL
+  const currentPosition = viewPositions.find(pos => pos.url === url);
+  const positionName = currentPosition ? currentPosition.name : null;
+  
+  // Use preloaded texture if available
+  if (positionName && preloadedTextures[positionName]) {
+    carTexture = preloadedTextures[positionName];
+    createCarPlane(carTexture);
+  } else {
+    // Fallback to loading directly if preloaded texture not available
+    console.warn(`Preloaded texture not found for ${url}, loading directly`);
+    
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.crossOrigin = 'anonymous';
+    textureLoader.load(
+      url,
+      function(texture) {
+        carTexture = texture;
+        createCarPlane(carTexture);
+      },
+      undefined,
+      function(err) {
+        console.error('Error loading texture:', err);
       }
-      
-      // Reset camera position
-      resetCamera();
+    );
+  }
+}
+
+function createCarPlane(texture) {
+  // Clear the paint render target to reset the paint
+  clearPaintLayer();
+  
+  // Create geometry based on texture aspect ratio
+  const aspect = texture.image.width / texture.image.height;
+  const width = aspect >= 1 ? 1.5 : 1.5 * aspect;
+  const height = aspect >= 1 ? 1.5 / aspect : 1.5;
+  
+  const geometry = new THREE.PlaneGeometry(width, height, 20, 20); // More segments for better UV mapping
+  
+  // Create a shader material that combines the car texture and paint overlay
+  const vertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+  `;
+  
+  const fragmentShader = `
+  uniform sampler2D carTexture;
+  uniform sampler2D paintTexture;
+  varying vec2 vUv;
+  
+  void main() {
+    vec4 carColor = texture2D(carTexture, vUv);
+    vec4 paintColor = texture2D(paintTexture, vUv);
+    
+    // Blend paint on top of car using paint alpha
+    vec3 finalColor = mix(carColor.rgb, paintColor.rgb, paintColor.a);
+    
+    gl_FragColor = vec4(finalColor, carColor.a);
+  }
+  `;
+  
+  // Create material with custom shader
+  carMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      carTexture: { value: texture },
+      paintTexture: { value: paintTexture }
     },
-    // onProgress callback (not needed)
-    undefined,
-    // onError callback
-    function(err) {
-      console.error('Error loading texture:', err);
-    }
-  );
+    vertexShader: vertexShader,
+    fragmentShader: fragmentShader,
+    transparent: true
+  });
+  
+  // Create the car plane
+  carPlane = new THREE.Mesh(geometry, carMaterial);
+  carPlane.position.z = 0.01; // Position slightly above the curb
+  scene.add(carPlane);
+  
+  // Check if curb exists, if not reload it
+  if (!curbPlane || !scene.getObjectById(curbPlane.id)) {
+    loadCurbBackground();
+  } else {
+    // Make sure curb stays behind car
+    curbPlane.position.z = -0.01;
+  }
+  
+  // Reset camera position
+  resetCamera();
 }
 
 function clearPaintLayer() {
   // Clear the paint canvas
-  paintContext.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
-  
-  // Update the texture if it exists
-  if (paintTexture) {
-    paintTexture.needsUpdate = true;
+  if (window.paintContext && window.paintCanvas) {
+    window.paintContext.clearRect(0, 0, window.paintCanvas.width, window.paintCanvas.height);
+    
+    // Update the texture
+    if (paintTexture) {
+      paintTexture.needsUpdate = true;
+    }
   }
 }
 
@@ -301,21 +448,32 @@ function animate() {
   // Update controls
   controls.update();
   
+  // Update paint texture when in draw mode
+  if (isDrawMode && paintTexture) {
+    paintTexture.needsUpdate = true;
+  }
+  
   // Render scene
   renderer.render(scene, camera);
 }
 
+// No longer needed - paint is applied directly to the canvas
+// We'll keep the drip function inside applySprayPaint
+
+// Apply the spray paint at the given UV coordinates
 function applySprayPaint(x, y) {
-  const brushRadius = drawSize / 2;
-  const particles = Math.floor(drawSize * drawSize * 0.4); // Number of particles based on brush size
+  if (!carPlane || !window.paintContext) return;
   
-  // Convert clientX/Y to canvas coordinates
-  const canvasRect = renderer.domElement.getBoundingClientRect();
-  const canvasX = ((x - canvasRect.left) / canvasRect.width) * paintCanvas.width;
-  const canvasY = ((y - canvasRect.top) / canvasRect.height) * paintCanvas.height;
+  // Get the paint canvas context
+  const paintCtx = window.paintContext;
+  const canvasWidth = window.paintCanvas.width;
+  const canvasHeight = window.paintCanvas.height;
+  
+  // Calculate canvas coordinates from UV coordinates
+  const canvasX = x * canvasWidth;
+  const canvasY = (1 - y) * canvasHeight; // Flip Y for canvas coordinates
   
   // Get a color with opacity
-  const color = drawColor;
   const hexToRgb = hex => {
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
@@ -323,11 +481,13 @@ function applySprayPaint(x, y) {
     return { r, g, b };
   };
   
-  const rgb = hexToRgb(color);
+  const rgb = hexToRgb(drawColor);
+  
+  // Calculate brush parameters
+  const brushRadius = drawSize * 2; // Scale up brush size for higher resolution canvas
+  const particles = Math.floor(drawSize * drawSize * 0.8); // More particles for denser spray
   
   // Draw multiple particles with Gaussian distribution
-  paintContext.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${drawOpacity * 0.05})`;
-  
   for (let i = 0; i < particles; i++) {
     // Use gaussian distribution (Box-Muller transform)
     let u = 0, v = 0;
@@ -340,96 +500,118 @@ function applySprayPaint(x, y) {
     let xOffset = radius * Math.cos(theta);
     let yOffset = radius * Math.sin(theta);
     
-    // Store the spray particle
-    sprayParticles.push({
-      x: canvasX + xOffset,
-      y: canvasY + yOffset,
-      size: Math.random() * 3 + 1,
-      opacity: Math.random() * 0.2 * drawOpacity
-    });
+    // Calculate particle parameters
+    const particleX = canvasX + xOffset;
+    const particleY = canvasY + yOffset;
+    const particleSize = Math.random() * 3 + 1;
+    const particleOpacity = Math.random() * 0.3 * drawOpacity;
+    
+    // Draw particle
+    paintCtx.beginPath();
+    paintCtx.arc(particleX, particleY, particleSize, 0, Math.PI * 2);
+    paintCtx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${particleOpacity})`;
+    paintCtx.fill();
   }
-  
-  // Draw all particles
-  sprayParticles.forEach(particle => {
-    paintContext.beginPath();
-    paintContext.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-    paintContext.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${particle.opacity})`;
-    paintContext.fill();
-  });
   
   // Simulate spray paint droplets and drips for larger brush sizes
   if (drawSize > 15 && Math.random() < 0.3) {
-    createDrip(canvasX, canvasY, rgb);
+    const dripLength = Math.random() * 50 + 20;
+    const dripWidth = Math.random() * 4 + 2;
+    
+    // Create a drip effect
+    const gradient = paintCtx.createLinearGradient(canvasX, canvasY, canvasX, canvasY + dripLength);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${drawOpacity * 0.7})`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    paintCtx.fillStyle = gradient;
+    paintCtx.beginPath();
+    paintCtx.ellipse(canvasX, canvasY, dripWidth, dripLength, 0, 0, Math.PI * 2);
+    paintCtx.fill();
   }
   
   // Update the texture
   paintTexture.needsUpdate = true;
   
-  // Store last position for line smoothing
-  lastDrawX = canvasX;
-  lastDrawY = canvasY;
+  // Store last intersection for interpolation
+  lastIntersection = { x, y };
 }
 
-function createDrip(x, y, rgb) {
-  const dripLength = Math.random() * 50 + 20;
-  const dripWidth = Math.random() * 4 + 2;
+// Interpolate between two points in UV space
+function interpolateSpray(from, to) {
+  if (!from || !to) return;
   
-  // Create a drip effect
-  const gradient = paintContext.createLinearGradient(x, y, x, y + dripLength);
-  gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${drawOpacity * 0.7})`);
-  gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
-  
-  paintContext.fillStyle = gradient;
-  paintContext.beginPath();
-  paintContext.ellipse(x, y, dripWidth, dripLength, 0, 0, Math.PI * 2);
-  paintContext.fill();
-}
-
-function interpolateSpray(x1, y1, x2, y2) {
   // Calculate distance between points
-  const dist = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+  const dist = Math.sqrt(Math.pow(to.x - from.x, 2) + Math.pow(to.y - from.y, 2));
   
   // If distance is small, no need to interpolate
-  if (dist < 5) return;
+  if (dist < 0.01) return;
   
-  // Calculate how many points to interpolate
-  const steps = Math.floor(dist / 5);
+  // Calculate how many points to interpolate based on distance
+  const steps = Math.ceil(dist * 100);
   
   // Interpolate points between start and end
   for (let i = 1; i < steps; i++) {
     const ratio = i / steps;
-    const x = x1 + (x2 - x1) * ratio;
-    const y = y1 + (y2 - y1) * ratio;
+    const x = from.x + (to.x - from.x) * ratio;
+    const y = from.y + (to.y - from.y) * ratio;
     
     applySprayPaint(x, y);
   }
 }
 
+// Start drawing at the given screen coordinates
 function startDrawing(x, y) {
-  if (!isDrawMode) return;
+  if (!isDrawMode || !carPlane) return;
   
   isDrawing = true;
-  sprayParticles = []; // Reset particles for new stroke
   
-  // Apply first spray at this position
-  applySprayPaint(x, y);
+  // Raycast to get UV coordinates
+  const canvasRect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((x - canvasRect.left) / canvasRect.width) * 2 - 1;
+  mouse.y = -((y - canvasRect.top) / canvasRect.height) * 2 + 1;
+  
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(carPlane);
+  
+  if (intersects.length > 0) {
+    const uv = intersects[0].uv;
+    lastIntersection = { x: uv.x, y: uv.y };
+    applySprayPaint(uv.x, uv.y);
+  }
 }
 
+// Continue drawing at the given screen coordinates
 function continueDraw(x, y) {
-  if (!isDrawMode || !isDrawing) return;
+  if (!isDrawMode || !isDrawing || !carPlane) return;
   
-  // Interpolate between last position and current for smooth lines
+  // Raycast to get UV coordinates
   const canvasRect = renderer.domElement.getBoundingClientRect();
-  const canvasX = x - canvasRect.left;
-  const canvasY = y - canvasRect.top;
+  mouse.x = ((x - canvasRect.left) / canvasRect.width) * 2 - 1;
+  mouse.y = -((y - canvasRect.top) / canvasRect.height) * 2 + 1;
   
-  interpolateSpray(lastDrawX, lastDrawY, canvasX, canvasY);
-  applySprayPaint(x, y);
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(carPlane);
+  
+  if (intersects.length > 0) {
+    const uv = intersects[0].uv;
+    const newIntersection = { x: uv.x, y: uv.y };
+    
+    // Interpolate between last position and current position
+    if (lastIntersection) {
+      interpolateSpray(lastIntersection, newIntersection);
+    }
+    
+    // Apply at the current position
+    applySprayPaint(uv.x, uv.y);
+    
+    // Update last intersection
+    lastIntersection = newIntersection;
+  }
 }
 
 function stopDrawing() {
   isDrawing = false;
-  sprayParticles = []; // Clear particles after stroke
+  lastIntersection = null;
 }
 
 function enableDrawMode() {
@@ -464,7 +646,6 @@ function setupEventListeners() {
   document.getElementById('prev-btn').addEventListener('click', showPreviousPosition);
   document.getElementById('next-btn').addEventListener('click', showNextPosition);
   document.getElementById('download-btn').addEventListener('click', downloadImage);
-  document.getElementById('reset-view-btn').addEventListener('click', resetCamera);
   
   // Drawing mode controls
   document.getElementById('draw-mode-btn').addEventListener('click', enableDrawMode);
