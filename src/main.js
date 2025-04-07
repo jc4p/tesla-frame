@@ -43,11 +43,14 @@ let isResizingSticker = false;
 let isRotatingSticker = false;
 let stickers = [];
 const availableStickers = [
-  { name: 'Stop Sign', url: 'https://images.kasra.codes/no-elon.png' },
-  { name: 'Delete Account', url: 'https://images.kasra.codes/delete-account.png' },
-  { name: 'Slime', url: 'https://images.kasra.codes/green-slime.png' },
-  { name: '1939', url: 'https://images.kasra.codes/0-1939.png' },
-  { name: 'Poop', url: 'https://images.kasra.codes/brown-poop.png' }
+  { name: 'Stop Sign', url: 'https://images.kasra.codes/no-elon.png?123' },
+  { name: 'Delete Account', url: 'https://images.kasra.codes/delete-account.png?123' },
+  { name: 'Slime', url: 'https://images.kasra.codes/green-slime.png?123' },
+  { name: '1939', url: 'https://images.kasra.codes/0-1939.png?123' },
+  { name: 'Poop', url: 'https://images.kasra.codes/brown-poop.png?123' },
+  { name: 'Gay', url: 'https://images.kasra.codes/gay-gay.png?123' },
+  { name: 'Trans', url: 'https://images.kasra.codes/trans-flag.png?123' },
+  { name: 'Heart', url: 'https://images.kasra.codes/gay-heart.png?123' }
 ];
 
 // Function to preload all textures
@@ -1104,8 +1107,17 @@ function setupEventListeners() {
     if (activeSticker) {
       const sizeValue = parseInt(this.value);
       activeSticker.scale = sizeValue / 100;
-      updateActiveSticker();
+      // Just update the display value without rendering to canvas during input
       document.getElementById('sticker-size-value').textContent = sizeValue + '%';
+      // Preview the size change without committing it to the canvas
+      renderStickerPreview();
+    }
+  });
+  
+  // Only commit the size change when the slider interaction is complete
+  stickerSizeInput.addEventListener('change', function() {
+    if (activeSticker) {
+      updateActiveSticker();
     }
   });
   
@@ -1115,8 +1127,17 @@ function setupEventListeners() {
     if (activeSticker) {
       const rotationValue = parseInt(this.value);
       activeSticker.rotation = rotationValue;
-      updateActiveSticker();
+      // Just update the display value without rendering to canvas during input
       document.getElementById('sticker-rotation-value').textContent = rotationValue + '°';
+      // Preview the rotation change without committing it to the canvas
+      renderStickerPreview();
+    }
+  });
+  
+  // Only commit the rotation change when the slider interaction is complete
+  stickerRotationInput.addEventListener('change', function() {
+    if (activeSticker) {
+      updateActiveSticker();
     }
   });
   
