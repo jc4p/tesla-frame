@@ -43,7 +43,11 @@ let isResizingSticker = false;
 let isRotatingSticker = false;
 let stickers = [];
 const availableStickers = [
-  { name: 'Punch Nazi', url: 'https://images.kasra.codes/punch-nazi-bumper-sticker.png' }
+  { name: 'Stop Sign', url: 'https://images.kasra.codes/no-elon.png' },
+  { name: 'Delete Account', url: 'https://images.kasra.codes/delete-account.png' },
+  { name: 'Slime', url: 'https://images.kasra.codes/green-slime.png' },
+  { name: '1939', url: 'https://images.kasra.codes/0-1939.png' },
+  { name: 'Poop', url: 'https://images.kasra.codes/brown-poop.png' }
 ];
 
 // Function to preload all textures
