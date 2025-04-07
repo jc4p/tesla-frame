@@ -116,8 +116,8 @@ h1 {
   margin-top: 10px;
 }
 
-/* Drawing controls */
-.draw-controls {
+/* Drawing and Sticker controls - shared styles */
+.draw-controls, .sticker-controls {
   background-color: rgba(30, 30, 30, 0.8);
   border-radius: 8px;
   padding: 15px;
@@ -129,6 +129,81 @@ h1 {
   gap: 15px;
   backdrop-filter: blur(5px);
   border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Sticker specific styles */
+.sticker-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sticker-gallery h3 {
+  font-size: 1.2em;
+  margin: 0;
+  text-align: center;
+}
+
+.sticker-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 15px;
+  padding: 10px;
+}
+
+.sticker-option {
+  width: 100px;
+  height: 60px;
+  background-color: rgba(60, 60, 60, 0.7);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  padding: 5px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  overflow: hidden;
+  position: relative;
+}
+
+.sticker-option img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.sticker-option:hover {
+  transform: scale(1.05);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.sticker-option.selected {
+  border-color: #646cff;
+  box-shadow: 0 0 10px rgba(100, 108, 255, 0.5);
+}
+
+.rotation-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rotation-control span:first-child {
+  min-width: 60px;
+}
+
+.rotation-control input {
+  flex: 1;
+}
+
+#sticker-rotation-value {
+  min-width: 40px;
+  text-align: right;
+}
+
+#active-sticker-controls {
+  background-color: rgba(70, 70, 70, 0.6);
+  border-radius: 6px;
+  padding: 10px;
 }
 
 .color-picker {
@@ -205,7 +280,7 @@ button:focus-visible {
   outline: 3px auto -webkit-focus-ring-color;
 }
 
-#download-btn, #draw-mode-btn {
+#download-btn, #draw-mode-btn, #sticker-mode-btn {
   min-width: 60px;
   min-height: 60px;
   font-size: 24px;
@@ -238,9 +313,17 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
   
-  .draw-controls {
+  .draw-controls, .sticker-controls {
     background-color: rgba(245, 245, 245, 0.9);
     border: 1px solid rgba(0, 0, 0, 0.1);
+  }
+  
+  #active-sticker-controls {
+    background-color: rgba(230, 230, 230, 0.8);
+  }
+  
+  .sticker-option {
+    background-color: rgba(200, 200, 200, 0.5);
   }
   
   .viewer-container canvas {
@@ -248,16 +331,16 @@ button:focus-visible {
     background-color: #f5f5f5;
   }
   
-  .nav-btn, #download-btn, #draw-mode-btn {
+  .nav-btn, #download-btn, #draw-mode-btn, #sticker-mode-btn {
     background-color: #e0e0e0;
     color: #333;
   }
   
-  .nav-btn:hover, #download-btn:hover, #draw-mode-btn:hover {
+  .nav-btn:hover, #download-btn:hover, #draw-mode-btn:hover, #sticker-mode-btn:hover {
     background-color: #d0d0d0;
   }
   
-  .nav-btn:active, #download-btn:active, #draw-mode-btn:active {
+  .nav-btn:active, #download-btn:active, #draw-mode-btn:active, #sticker-mode-btn:active {
     background-color: #c0c0c0;
   }
   
@@ -278,7 +361,7 @@ button:focus-visible {
     align-items: center;
   }
   
-  #download-btn, #draw-mode-btn {
+  #download-btn, #draw-mode-btn, #sticker-mode-btn {
     min-width: 50px;
     min-height: 50px;
   }

@@ -34,6 +34,18 @@ let brushCanvas, brushContext;
 let paintScene, paintCamera;
 let lastIntersection = null;
 
+// Sticker variables
+let isStickerMode = false;
+let activeSticker = null;
+let isPlacingSticker = false;
+let isMovingSticker = false;
+let isResizingSticker = false;
+let isRotatingSticker = false;
+let stickers = [];
+const availableStickers = [
+  { name: 'Punch Nazi', url: 'https://images.kasra.codes/punch-nazi-bumper-sticker.png' }
+];
+
 // Function to preload all textures
 function preloadTextures(callback) {
   const textureLoader = new THREE.TextureLoader();
@@ -133,6 +145,7 @@ function initializeScene() {
       <div class="controls">
         <button id="download-btn" title="Download Image">💾</button>
         <button id="draw-mode-btn" title="Spray Paint">🎨</button>
+        <button id="sticker-mode-btn" title="Add Stickers">🏷️</button>
       </div>
       <div id="draw-controls" class="draw-controls" style="display: none;">
         <div class="color-picker">
@@ -157,6 +170,31 @@ function initializeScene() {
         </div>
         <button id="clear-canvas-btn">Clear Paint</button>
         <button id="exit-draw-mode-btn">Exit Paint Mode</button>
+      </div>
+      
+      <div id="sticker-controls" class="sticker-controls" style="display: none;">
+        <div class="sticker-gallery">
+          <h3>Select a Sticker</h3>
+          <div class="sticker-options">
+            <!-- Stickers will be added here dynamically -->
+          </div>
+        </div>
+        
+        <div id="active-sticker-controls" style="display: none;">
+          <div class="size-control">
+            <span>Size: </span>
+            <input type="range" id="sticker-size" min="20" max="200" value="100">
+            <span id="sticker-size-value">100%</span>
+          </div>
+          <div class="rotation-control">
+            <span>Rotation: </span>
+            <input type="range" id="sticker-rotation" min="0" max="360" value="0">
+            <span id="sticker-rotation-value">0°</span>
+          </div>
+          <button id="remove-sticker-btn">Remove Sticker</button>
+        </div>
+        
+        <button id="exit-sticker-mode-btn">Exit Sticker Mode</button>
       </div>
     </div>
   `;
@@ -641,6 +679,403 @@ function disableDrawMode() {
   renderer.domElement.style.cursor = 'grab';
 }
 
+// Sticker Mode Functions
+function enableStickerMode() {
+  // Disable other modes
+  if (isDrawMode) {
+    disableDrawMode();
+  }
+  
+  isStickerMode = true;
+  
+  // Show sticker controls
+  document.getElementById('sticker-controls').style.display = 'flex';
+  
+  // Disable orbit controls temporarily
+  controls.enabled = false;
+  
+  // Change cursor
+  renderer.domElement.style.cursor = 'default';
+}
+
+function disableStickerMode() {
+  isStickerMode = false;
+  isPlacingSticker = false;
+  
+  // Deselect active sticker
+  activeSticker = null;
+  
+  // Hide sticker controls
+  document.getElementById('sticker-controls').style.display = 'none';
+  document.getElementById('active-sticker-controls').style.display = 'none';
+  
+  // Re-enable orbit controls
+  controls.enabled = true;
+  
+  // Reset cursor
+  renderer.domElement.style.cursor = 'grab';
+}
+
+function setupStickerGallery() {
+  const stickerOptions = document.querySelector('.sticker-options');
+  stickerOptions.innerHTML = '';
+  
+  // Create options for each available sticker
+  availableStickers.forEach((sticker, index) => {
+    const option = document.createElement('div');
+    option.className = 'sticker-option';
+    option.dataset.index = index;
+    
+    const img = document.createElement('img');
+    img.crossOrigin = "anonymous"; // Set crossOrigin for gallery thumbnails
+    img.src = sticker.url;
+    img.alt = sticker.name;
+    
+    option.appendChild(img);
+    stickerOptions.appendChild(option);
+    
+    // Add click event to select sticker
+    option.addEventListener('click', function() {
+      selectSticker(index);
+    });
+  });
+}
+
+function selectSticker(index) {
+  // Get sticker data
+  const sticker = availableStickers[index];
+  
+  // Set as active for placing
+  isPlacingSticker = true;
+  
+  // Remove selected class from all options
+  document.querySelectorAll('.sticker-option').forEach(option => {
+    option.classList.remove('selected');
+  });
+  
+  // Add selected class to chosen option
+  document.querySelector(`.sticker-option[data-index="${index}"]`).classList.add('selected');
+  
+  // Preload sticker image
+  const stickerImg = new Image();
+  stickerImg.crossOrigin = "anonymous"; // Set crossOrigin to allow texture use
+  stickerImg.src = sticker.url;
+  stickerImg.onload = function() {
+    // Create a new sticker object
+    activeSticker = {
+      url: sticker.url,
+      image: stickerImg,
+      x: 0.5, // Center of UV space
+      y: 0.5,
+      scale: 1.0,
+      rotation: 0,
+      width: stickerImg.width,
+      height: stickerImg.height,
+      aspect: stickerImg.width / stickerImg.height
+    };
+    
+    // Reset controls
+    document.getElementById('sticker-size').value = 100;
+    document.getElementById('sticker-size-value').textContent = '100%';
+    document.getElementById('sticker-rotation').value = 0;
+    document.getElementById('sticker-rotation-value').textContent = '0°';
+    
+    // Start with sticker following cursor
+    renderer.domElement.style.cursor = 'none';
+  };
+}
+
+function handleStickerMouseDown(event) {
+  const canvasRect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((event.clientX - canvasRect.left) / canvasRect.width) * 2 - 1;
+  mouse.y = -((event.clientY - canvasRect.top) / canvasRect.height) * 2 + 1;
+  
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(carPlane);
+  
+  if (intersects.length > 0) {
+    const uv = intersects[0].uv;
+    
+    if (isPlacingSticker && activeSticker) {
+      // Place the sticker at this position
+      activeSticker.x = uv.x;
+      activeSticker.y = uv.y;
+      stickers.push(activeSticker);
+      
+      // Draw sticker to texture
+      renderStickers();
+      
+      // Show sticker controls
+      document.getElementById('active-sticker-controls').style.display = 'block';
+      
+      // No longer placing, now in edit mode
+      isPlacingSticker = false;
+      renderer.domElement.style.cursor = 'move';
+    } else {
+      // Check if we clicked on an existing sticker
+      const clickedSticker = findStickerAt(uv.x, uv.y);
+      if (clickedSticker) {
+        activeSticker = clickedSticker;
+        isMovingSticker = true;
+        
+        // Show sticker controls and update values
+        document.getElementById('active-sticker-controls').style.display = 'block';
+        document.getElementById('sticker-size').value = Math.round(activeSticker.scale * 100);
+        document.getElementById('sticker-size-value').textContent = Math.round(activeSticker.scale * 100) + '%';
+        document.getElementById('sticker-rotation').value = activeSticker.rotation;
+        document.getElementById('sticker-rotation-value').textContent = activeSticker.rotation + '°';
+        
+        renderer.domElement.style.cursor = 'move';
+      } else {
+        // Clicked on empty space, deselect
+        activeSticker = null;
+        document.getElementById('active-sticker-controls').style.display = 'none';
+        renderer.domElement.style.cursor = 'default';
+      }
+    }
+  }
+}
+
+function handleStickerMouseMove(event) {
+  const canvasRect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((event.clientX - canvasRect.left) / canvasRect.width) * 2 - 1;
+  mouse.y = -((event.clientY - canvasRect.top) / canvasRect.height) * 2 + 1;
+  
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(carPlane);
+  
+  if (intersects.length > 0) {
+    const uv = intersects[0].uv;
+    
+    if (isPlacingSticker && activeSticker) {
+      // Update sticker position for preview
+      activeSticker.x = uv.x;
+      activeSticker.y = uv.y;
+      
+      // Render sticker preview
+      renderStickerPreview();
+    } else if (isMovingSticker && activeSticker) {
+      // Move the sticker
+      activeSticker.x = uv.x;
+      activeSticker.y = uv.y;
+      
+      // Update sticker
+      renderStickers();
+    }
+  }
+}
+
+function handleStickerMouseUp(event) {
+  if (isMovingSticker) {
+    isMovingSticker = false;
+    renderer.domElement.style.cursor = 'default';
+  }
+}
+
+function handleStickerTouchStart(event, touch) {
+  // Convert touch to mouse event
+  const canvasRect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((touch.clientX - canvasRect.left) / canvasRect.width) * 2 - 1;
+  mouse.y = -((touch.clientY - canvasRect.top) / canvasRect.height) * 2 + 1;
+  
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(carPlane);
+  
+  if (intersects.length > 0) {
+    const uv = intersects[0].uv;
+    
+    if (isPlacingSticker && activeSticker) {
+      // Place the sticker at this position
+      activeSticker.x = uv.x;
+      activeSticker.y = uv.y;
+      stickers.push(activeSticker);
+      
+      // Draw sticker to texture
+      renderStickers();
+      
+      // Show sticker controls
+      document.getElementById('active-sticker-controls').style.display = 'block';
+      
+      // No longer placing, now in edit mode
+      isPlacingSticker = false;
+    } else {
+      // Check if we touched an existing sticker
+      const touchedSticker = findStickerAt(uv.x, uv.y);
+      if (touchedSticker) {
+        activeSticker = touchedSticker;
+        isMovingSticker = true;
+        
+        // Show sticker controls and update values
+        document.getElementById('active-sticker-controls').style.display = 'block';
+        document.getElementById('sticker-size').value = Math.round(activeSticker.scale * 100);
+        document.getElementById('sticker-size-value').textContent = Math.round(activeSticker.scale * 100) + '%';
+        document.getElementById('sticker-rotation').value = activeSticker.rotation;
+        document.getElementById('sticker-rotation-value').textContent = activeSticker.rotation + '°';
+      } else {
+        // Touched empty space, deselect
+        activeSticker = null;
+        document.getElementById('active-sticker-controls').style.display = 'none';
+      }
+    }
+  }
+}
+
+function handleStickerTouchMove(event, touch) {
+  // Convert touch to mouse event
+  const canvasRect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((touch.clientX - canvasRect.left) / canvasRect.width) * 2 - 1;
+  mouse.y = -((touch.clientY - canvasRect.top) / canvasRect.height) * 2 + 1;
+  
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(carPlane);
+  
+  if (intersects.length > 0) {
+    const uv = intersects[0].uv;
+    
+    if (isPlacingSticker && activeSticker) {
+      // Update sticker position for preview
+      activeSticker.x = uv.x;
+      activeSticker.y = uv.y;
+      
+      // Render sticker preview
+      renderStickerPreview();
+    } else if (isMovingSticker && activeSticker) {
+      // Move the sticker
+      activeSticker.x = uv.x;
+      activeSticker.y = uv.y;
+      
+      // Update sticker
+      renderStickers();
+    }
+  }
+}
+
+function handleStickerTouchEnd(event) {
+  if (isMovingSticker) {
+    isMovingSticker = false;
+  }
+}
+
+function findStickerAt(x, y) {
+  // Check if coordinates are inside any existing sticker
+  for (let i = stickers.length - 1; i >= 0; i--) {
+    const sticker = stickers[i];
+    
+    // Get sticker bounds in UV space
+    const scaledWidth = (sticker.width / window.paintCanvas.width) * sticker.scale;
+    const scaledHeight = (sticker.height / window.paintCanvas.height) * sticker.scale;
+    const halfWidth = scaledWidth / 2;
+    const halfHeight = scaledHeight / 2;
+    
+    // Simple rectangular hit test (ignore rotation for simplicity)
+    if (x >= sticker.x - halfWidth && x <= sticker.x + halfWidth &&
+        y >= sticker.y - halfHeight && y <= sticker.y + halfHeight) {
+      return sticker;
+    }
+  }
+  
+  return null;
+}
+
+function updateActiveSticker() {
+  if (!activeSticker) return;
+  
+  // Find the sticker in the array and update it
+  const index = stickers.indexOf(activeSticker);
+  if (index > -1) {
+    stickers[index] = activeSticker;
+    renderStickers();
+  }
+}
+
+function renderStickerPreview() {
+  if (!activeSticker || !window.paintContext) return;
+  
+  // Create a temporary rendering context
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = window.paintCanvas.width;
+  tempCanvas.height = window.paintCanvas.height;
+  const tempContext = tempCanvas.getContext('2d');
+  
+  // Copy current paint canvas to temp canvas
+  tempContext.drawImage(window.paintCanvas, 0, 0);
+  
+  // Draw the active sticker
+  drawStickerToContext(tempContext, activeSticker);
+  
+  // Create temporary texture with proper settings
+  const tempTexture = new THREE.CanvasTexture(tempCanvas);
+  tempTexture.needsUpdate = true;
+  tempTexture.minFilter = THREE.LinearFilter;
+  tempTexture.magFilter = THREE.LinearFilter;
+  tempTexture.generateMipmaps = false;
+  
+  // Update shader uniforms
+  if (carMaterial && carMaterial.uniforms) {
+    carMaterial.uniforms.paintTexture.value = tempTexture;
+  }
+}
+
+function renderStickers() {
+  if (!window.paintContext) return;
+  
+  // Clear canvas first (keeping spray paint)
+  const imageData = window.paintContext.getImageData(0, 0, window.paintCanvas.width, window.paintCanvas.height);
+  
+  // Create a temporary canvas to hold spray paint
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = window.paintCanvas.width;
+  tempCanvas.height = window.paintCanvas.height;
+  const tempContext = tempCanvas.getContext('2d');
+  tempContext.putImageData(imageData, 0, 0);
+  
+  // Clear the main canvas
+  window.paintContext.clearRect(0, 0, window.paintCanvas.width, window.paintCanvas.height);
+  
+  // Restore spray paint
+  window.paintContext.drawImage(tempCanvas, 0, 0);
+  
+  // Draw all stickers
+  stickers.forEach(sticker => {
+    drawStickerToContext(window.paintContext, sticker);
+  });
+  
+  // Update texture with proper settings
+  paintTexture.needsUpdate = true;
+  paintTexture.minFilter = THREE.LinearFilter;
+  paintTexture.magFilter = THREE.LinearFilter;
+  paintTexture.generateMipmaps = false;
+}
+
+function drawStickerToContext(context, sticker) {
+  // Get dimensions
+  const canvasWidth = context.canvas.width;
+  const canvasHeight = context.canvas.height;
+  
+  // Calculate position in canvas coordinates
+  const canvasX = sticker.x * canvasWidth;
+  const canvasY = (1 - sticker.y) * canvasHeight; // Flip Y for canvas coordinates
+  
+  // Save context state
+  context.save();
+  
+  // Translate to sticker center
+  context.translate(canvasX, canvasY);
+  
+  // Apply rotation (convert to radians)
+  context.rotate((sticker.rotation * Math.PI) / 180);
+  
+  // Calculate scaled dimensions
+  const scaledWidth = sticker.width * sticker.scale;
+  const scaledHeight = sticker.height * sticker.scale;
+  
+  // Draw sticker image
+  context.drawImage(sticker.image, -scaledWidth / 2, -scaledHeight / 2, scaledWidth, scaledHeight);
+  
+  // Restore context state
+  context.restore();
+}
+
 function setupEventListeners() {
   // Navigation and basic controls
   document.getElementById('prev-btn').addEventListener('click', showPreviousPosition);
@@ -651,6 +1086,48 @@ function setupEventListeners() {
   document.getElementById('draw-mode-btn').addEventListener('click', enableDrawMode);
   document.getElementById('exit-draw-mode-btn').addEventListener('click', disableDrawMode);
   document.getElementById('clear-canvas-btn').addEventListener('click', clearPaintLayer);
+  
+  // Sticker mode controls
+  document.getElementById('sticker-mode-btn').addEventListener('click', enableStickerMode);
+  document.getElementById('exit-sticker-mode-btn').addEventListener('click', disableStickerMode);
+  
+  // Setup sticker gallery
+  setupStickerGallery();
+  
+  // Sticker size control
+  const stickerSizeInput = document.getElementById('sticker-size');
+  stickerSizeInput.addEventListener('input', function() {
+    if (activeSticker) {
+      const sizeValue = parseInt(this.value);
+      activeSticker.scale = sizeValue / 100;
+      updateActiveSticker();
+      document.getElementById('sticker-size-value').textContent = sizeValue + '%';
+    }
+  });
+  
+  // Sticker rotation control
+  const stickerRotationInput = document.getElementById('sticker-rotation');
+  stickerRotationInput.addEventListener('input', function() {
+    if (activeSticker) {
+      const rotationValue = parseInt(this.value);
+      activeSticker.rotation = rotationValue;
+      updateActiveSticker();
+      document.getElementById('sticker-rotation-value').textContent = rotationValue + '°';
+    }
+  });
+  
+  // Remove sticker button
+  document.getElementById('remove-sticker-btn').addEventListener('click', function() {
+    if (activeSticker) {
+      const index = stickers.indexOf(activeSticker);
+      if (index > -1) {
+        stickers.splice(index, 1);
+      }
+      activeSticker = null;
+      document.getElementById('active-sticker-controls').style.display = 'none';
+      renderStickers();
+    }
+  });
   
   // Brush size control
   const brushSizeInput = document.getElementById('brush-size');
@@ -682,24 +1159,43 @@ function setupEventListeners() {
   // Set initial active color
   document.querySelector('[data-color="#ff0000"]').classList.add('active-color');
   
-  // Mouse/touch events for drawing
+  // Mouse/touch events for drawing and stickers
   const canvas = renderer.domElement;
   
   // Mouse events
   canvas.addEventListener('mousedown', function(event) {
     if (isDrawMode) {
       startDrawing(event.clientX, event.clientY);
+    } else if (isStickerMode) {
+      handleStickerMouseDown(event);
     }
   });
   
   canvas.addEventListener('mousemove', function(event) {
     if (isDrawMode && isDrawing) {
       continueDraw(event.clientX, event.clientY);
+    } else if (isStickerMode) {
+      handleStickerMouseMove(event);
     }
   });
   
-  canvas.addEventListener('mouseup', stopDrawing);
-  canvas.addEventListener('mouseleave', stopDrawing);
+  canvas.addEventListener('mouseup', function(event) {
+    if (isDrawMode) {
+      stopDrawing();
+    } else if (isStickerMode) {
+      handleStickerMouseUp(event);
+    }
+  });
+  
+  canvas.addEventListener('mouseleave', function() {
+    if (isDrawMode) {
+      stopDrawing();
+    } else if (isStickerMode) {
+      isMovingSticker = false;
+      isResizingSticker = false;
+      isRotatingSticker = false;
+    }
+  });
   
   // Touch events
   canvas.addEventListener('touchstart', function(event) {
@@ -707,6 +1203,10 @@ function setupEventListeners() {
       event.preventDefault();
       const touch = event.touches[0];
       startDrawing(touch.clientX, touch.clientY);
+    } else if (isStickerMode) {
+      event.preventDefault();
+      const touch = event.touches[0];
+      handleStickerTouchStart(event, touch);
     }
   });
   
@@ -715,11 +1215,30 @@ function setupEventListeners() {
       event.preventDefault();
       const touch = event.touches[0];
       continueDraw(touch.clientX, touch.clientY);
+    } else if (isStickerMode) {
+      event.preventDefault();
+      const touch = event.touches[0];
+      handleStickerTouchMove(event, touch);
     }
   });
   
-  canvas.addEventListener('touchend', stopDrawing);
-  canvas.addEventListener('touchcancel', stopDrawing);
+  canvas.addEventListener('touchend', function(event) {
+    if (isDrawMode) {
+      stopDrawing();
+    } else if (isStickerMode) {
+      handleStickerTouchEnd(event);
+    }
+  });
+  
+  canvas.addEventListener('touchcancel', function() {
+    if (isDrawMode) {
+      stopDrawing();
+    } else if (isStickerMode) {
+      isMovingSticker = false;
+      isResizingSticker = false;
+      isRotatingSticker = false;
+    }
+  });
 }
 
 function showNextPosition() {
